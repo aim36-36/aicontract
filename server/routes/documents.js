@@ -12,6 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 
@@ -21,7 +22,7 @@ const { smartChunk, analyzeDocument, getChunkPromptContext } = require('../servi
 const { vectorStore, ragPipeline } = require('../services/rag');
 
 const router = express.Router();
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: os.tmpdir() });
 
 /**
  * 清理临时文件
@@ -143,44 +144,44 @@ router.post('/analyze/:id', async (req, res) => {
         // 阶段 1: 智能分块 (Chunking)
         // ==========================================
         sendProgress('chunking', 5, '正在进行智能文档分块...');
-        
+
         const chunks = smartChunk(text);
         console.log(`[Analyze] Split into ${chunks.length} semantic chunks`);
-        
+
         sendProgress('chunking', 10, `文档已分为 ${chunks.length} 个语义片段`);
 
         // ==========================================
         // 阶段 2: 并行 Map 分析
         // ==========================================
         sendProgress('mapping', 15, '开始多片段并行分析...');
-        
+
         const chunkResults = [];
         const concurrency = 3; // 并发数限制
-        
+
         for (let i = 0; i < chunks.length; i += concurrency) {
             const batch = chunks.slice(i, Math.min(i + concurrency, chunks.length));
-            
+
             // 并行处理当前批次
             const batchPromises = batch.map(async (chunk, batchIndex) => {
                 const chunkIndex = i + batchIndex;
                 const promptContext = getChunkPromptContext(chunk);
-                
+
                 try {
                     const analysis = await analyzeChunk(chunk.content, promptContext);
                     return { index: chunkIndex, success: true, data: analysis };
                 } catch (error) {
                     console.error(`[Analyze] Chunk ${chunkIndex} failed:`, error.message);
-                    return { 
-                        index: chunkIndex, 
-                        success: false, 
-                        data: { score: 50, summary: '分析失败', risks: [] } 
+                    return {
+                        index: chunkIndex,
+                        success: false,
+                        data: { score: 50, summary: '分析失败', risks: [] }
                     };
                 }
             });
 
             const batchResults = await Promise.all(batchPromises);
             chunkResults.push(...batchResults.sort((a, b) => a.index - b.index).map(r => r.data));
-            
+
             // 更新进度
             const progress = 15 + Math.round((i + batch.length) / chunks.length * 55);
             sendProgress('mapping', progress, `已分析 ${Math.min(i + concurrency, chunks.length)}/${chunks.length} 个片段`);
@@ -192,16 +193,16 @@ router.post('/analyze/:id', async (req, res) => {
         // 阶段 3: Reduce 汇总
         // ==========================================
         sendProgress('reducing', 75, '正在整合分析结果...');
-        
+
         const finalReport = await consolidateAnalysis(chunkResults, chunks.length);
-        
+
         sendProgress('reducing', 90, '生成最终报告...');
 
         // ==========================================
         // 阶段 4: 向量索引 (可选，后台进行)
         // ==========================================
         sendProgress('indexing', 95, '建立文档索引...');
-        
+
         // 后台索引，不阻塞响应
         vectorStore.indexDocument(document_id || documentId, text, {
             fileName: documentId,
@@ -214,20 +215,20 @@ router.post('/analyze/:id', async (req, res) => {
         sendProgress('complete', 100, '分析完成');
 
         // 发送最终结果
-        res.write(`data: ${JSON.stringify({ 
-            stage: 'result', 
+        res.write(`data: ${JSON.stringify({
+            stage: 'result',
             progress: 100,
-            data: finalReport 
+            data: finalReport
         })}\n\n`);
-        
+
         res.end();
 
     } catch (error) {
         console.error("[Analyze] Error:", error);
         sendProgress('error', 0, `分析失败: ${error.message}`);
-        res.write(`data: ${JSON.stringify({ 
-            stage: 'error', 
-            error: error.message 
+        res.write(`data: ${JSON.stringify({
+            stage: 'error',
+            error: error.message
         })}\n\n`);
         res.end();
     }
@@ -254,49 +255,49 @@ router.post('/analyze-sync/:id', async (req, res) => {
         // 2. 并行分析（提升速度）
         const chunkResults = [];
         const concurrency = 4; // 增加并发数，加快处理速度
-        
+
         for (let i = 0; i < chunks.length; i += concurrency) {
             const batch = chunks.slice(i, Math.min(i + concurrency, chunks.length));
-            
+
             const batchPromises = batch.map(async (chunk, batchIndex) => {
                 const chunkIndex = i + batchIndex;
-                
+
                 // 确保正确获取分块内容（smartChunk 返回 {content, metadata} 格式）
                 const chunkContent = chunk.content || (typeof chunk === 'string' ? chunk : '');
                 if (!chunkContent || (typeof chunkContent === 'string' && chunkContent.trim().length === 0)) {
                     console.warn(`[Analyze-Sync] Chunk ${chunkIndex} is empty, skipping`);
-                    return { 
-                        index: chunkIndex, 
-                        success: false, 
-                        data: { score: 50, summary: '分块内容为空', risks: [] } 
+                    return {
+                        index: chunkIndex,
+                        success: false,
+                        data: { score: 50, summary: '分块内容为空', risks: [] }
                     };
                 }
-                
+
                 const promptContext = getChunkPromptContext(chunk);
-                
+
                 try {
                     const analysis = await analyzeChunk(chunkContent, promptContext);
                     return { index: chunkIndex, success: true, data: analysis };
                 } catch (error) {
                     console.error(`[Analyze-Sync] Chunk ${chunkIndex} error:`, error.message);
                     // 返回空结果，不包含错误信息，避免错误信息出现在摘要中
-                    return { 
-                        index: chunkIndex, 
-                        success: false, 
-                        data: { 
-                            score: 50, 
-                            summary: '该片段分析跳过', 
+                    return {
+                        index: chunkIndex,
+                        success: false,
+                        data: {
+                            score: 50,
+                            summary: '该片段分析跳过',
                             risks: [],
                             keyTerms: [],
                             suggestions: []
-                        } 
+                        }
                     };
                 }
             });
 
             const batchResults = await Promise.all(batchPromises);
             chunkResults.push(...batchResults.sort((a, b) => a.index - b.index).map(r => r.data));
-            
+
             console.log(`[Analyze-Sync] Progress: ${Math.min(i + concurrency, chunks.length)}/${chunks.length} chunks analyzed`);
         }
 
@@ -321,7 +322,7 @@ router.post('/analyze-sync/:id', async (req, res) => {
             const validSummaries = chunkResults
                 .map(r => r.summary)
                 .filter(s => s && !s.includes('分析失败') && !s.includes('网络连接') && s !== '该片段分析跳过');
-            
+
             // 生成风险分类
             const riskCategories = {};
             allRisks.forEach(risk => {
@@ -333,17 +334,17 @@ router.post('/analyze-sync/:id', async (req, res) => {
                     riskCategories[category].push(risk.title);
                 }
             });
-            
+
             // 按风险等级排序
             allRisks.sort((a, b) => {
                 const order = { high: 3, medium: 2, low: 1 };
                 return (order[b.level] || 0) - (order[a.level] || 0);
             });
-            
+
             finalReport = {
                 score: avgScore,
                 riskLevel: avgScore >= 80 ? 'low' : avgScore >= 60 ? 'medium' : avgScore >= 40 ? 'high' : 'critical',
-                summary: validSummaries.length > 0 
+                summary: validSummaries.length > 0
                     ? `合同共分${chunks.length}段分析，平均得分${avgScore}分，发现${allRisks.length}个风险点。${validSummaries.slice(0, 3).join('；')}`
                     : `合同共分${chunks.length}段分析，平均得分${avgScore}分，发现${allRisks.length}个风险点。`,
                 contractProfile: undefined,
@@ -423,9 +424,9 @@ router.post('/query', async (req, res) => {
 
     try {
         console.log(`[Query] Question: "${question}" for doc: ${document_id}`);
-        
+
         const result = await ragPipeline.query(question, document_id);
-        
+
         res.json(result);
 
     } catch (error) {
@@ -448,13 +449,13 @@ router.post('/reindex/:id', async (req, res) => {
     try {
         // 删除旧索引
         await vectorStore.deleteDocumentVectors(documentId);
-        
+
         // 重新索引
         const result = await vectorStore.indexDocument(documentId, text);
-        
-        res.json({ 
-            success: true, 
-            chunkCount: result.chunkCount 
+
+        res.json({
+            success: true,
+            chunkCount: result.chunkCount
         });
 
     } catch (error) {
@@ -481,12 +482,12 @@ router.get('/index-stats/:id', async (req, res) => {
  * ============================================
  */
 router.post('/export-docx', async (req, res) => {
-    const { 
-        content, 
-        annotations, 
-        risks, 
-        score, 
-        summary, 
+    const {
+        content,
+        annotations,
+        risks,
+        score,
+        summary,
         riskLevel,
         contractProfile,
         riskCategories,
@@ -496,8 +497,8 @@ router.post('/export-docx', async (req, res) => {
         overallSuggestions,
         keyFactsToConfirm,
         nextSteps,
-        signRecommendation, 
-        fileName 
+        signRecommendation,
+        fileName
     } = req.body;
 
     if (!content) {
@@ -507,19 +508,19 @@ router.post('/export-docx', async (req, res) => {
     try {
         // 生成带批注的文本内容
         let annotatedContent = content;
-        
+
         if (annotations && annotations.length > 0) {
             // 按位置倒序处理，避免插入批注后位置偏移
             const sortedAnnots = [...annotations].sort((a, b) => b.position - a.position);
-            
+
             sortedAnnots.forEach((annot) => {
-                const levelIcon = annot.risk.level === 'high' ? '⚠️ 高风险' : 
-                                  annot.risk.level === 'medium' ? '⚡ 中风险' : 'ℹ️ 低风险';
-                
+                const levelIcon = annot.risk.level === 'high' ? '⚠️ 高风险' :
+                    annot.risk.level === 'medium' ? '⚡ 中风险' : 'ℹ️ 低风险';
+
                 const suggestion = annot.risk.recommendation || '建议审慎评估此条款，必要时与对方协商修改。';
                 const legalBasis = annot.risk.legalBasis ? `\n法律依据: ${annot.risk.legalBasis}` : '';
                 const annotationText = `\n\n【${levelIcon} - ${annot.risk.title}】\n原文: "${annot.clause}"\n风险分析: ${annot.risk.description}${legalBasis}\n修改建议: ${suggestion}\n`;
-                
+
                 const insertPos = annot.position + annot.clause.length;
                 annotatedContent = annotatedContent.slice(0, insertPos) + annotationText + annotatedContent.slice(insertPos);
             });
@@ -629,7 +630,7 @@ router.post('/export-docx', async (req, res) => {
         }
 
         // 返回文本内容（前端可以转换为 DOCX）
-        res.json({ 
+        res.json({
             content: fullContent,
             fileName: fileName || '合同审查报告'
         });
@@ -647,14 +648,14 @@ router.post('/export-docx', async (req, res) => {
  */
 router.post('/assist', async (req, res) => {
     const { text, action } = req.body;
-    
+
     if (!text || !action) {
         return res.status(400).json({ error: 'Text and action required' });
     }
 
     try {
         console.log(`[Assist] Action: ${action}, text length: ${text.length}`);
-        
+
         const result = await performAiAction(text, action);
         res.json({ result });
 
