@@ -2,6 +2,16 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+
+// Vercel / serverless polyfill for pdf-parse/pdfjs
+if (typeof global.DOMMatrix === 'undefined') {
+    global.DOMMatrix = class DOMMatrix {
+        constructor(init) {
+            this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0;
+        }
+    };
+}
+
 const documentRoutes = require('./routes/documents');
 
 dotenv.config();
