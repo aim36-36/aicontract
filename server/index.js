@@ -20,7 +20,13 @@ app.get('/', (req, res) => {
     res.send('Elite Legal AI Backend is running');
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-    console.log(`API ready: http://localhost:${PORT}/api`);
-});
+// Export the app for Vercel
+module.exports = app;
+
+// Only listen if not in production (Vercel handles listening in production)
+if (process.env.NODE_ENV !== 'production') {
+    app.listen(PORT, () => {
+        console.log(`Server is running on port ${PORT}`);
+        console.log(`API ready: http://localhost:${PORT}/api`);
+    });
+}
